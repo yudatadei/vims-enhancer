@@ -2,7 +2,7 @@
 // @name         VIMS Enhancer
 // @namespace    tadey
 // @icon         https://vims.moh.go.tz/public/v1770157188524/favicon.ico
-// @version      1.0.2
+// @version      1.0.3
 // @description  Hides selected vaccine/product rows and unwanted columns in VIMS tables, adds zebra stripes, and provides a movable settings panel for choosing what to hide.
 // @license      MIT
 // @author       tadey
@@ -127,6 +127,7 @@
   }
 
   let settings = loadSettings();
+  let refreshPanelTheme = null;
 
   function saveSettings() {
     try {
@@ -651,7 +652,22 @@
     actionBarStates.delete(bar);
   }
 
+  // Dark Reader inverts light source colors. In dark mode, use a neutral
+  // translucent stripe and let Dark Reader control the text color.
+  function isDarkReaderDark() {
+    const root = document.documentElement;
+    const scheme = root.getAttribute("data-darkreader-scheme");
+    if (scheme === "light") return false;
+    if (scheme === "dark") return true;
+    return (
+      root.hasAttribute("data-darkreader-mode") ||
+      !!document.getElementById("dark-reader-style")
+    );
+  }
+
   function applyFilters() {
+    const darkReader = isDarkReaderDark();
+    if (refreshPanelTheme) refreshPanelTheme(darkReader);
     const tables = Array.from(document.querySelectorAll("table"));
     const tableInfo = tables.map((t, tableIndex) => {
       const groups = getGroups(t);
@@ -760,10 +776,16 @@
             row.style.display = "";
             const cells = Array.from(row.cells);
             if (settings.stripes) {
-              row.style.backgroundColor = stripe ? "#e5e7eb" : "#ffffff";
+              if (darkReader) {
+                row.style.backgroundColor = stripe
+                  ? "rgba(127, 127, 127, 0.15)"
+                  : "transparent";
+              } else {
+                row.style.backgroundColor = stripe ? "#e5e7eb" : "#ffffff";
+              }
               cells.forEach((c) => {
                 c.style.backgroundColor = "transparent";
-                c.style.color = "#111827";
+                c.style.color = darkReader ? "" : "#111827";
               });
             } else {
               row.style.backgroundColor = "";
@@ -829,7 +851,7 @@
         'system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
       fontSize: "13px",
       lineHeight: "1.4",
-      color: "#111827",
+      color: "var(--vims-text)",
     });
     shadow.appendChild(root);
 
@@ -842,19 +864,62 @@
       position: "absolute",
       zIndex: "1",
       boxSizing: "border-box",
-      width: "360px",
+      width: "min(360px, calc(100vw - 24px))",
       maxWidth: "calc(100vw - 24px)",
-      maxHeight: "70vh",
+      maxHeight: "min(70vh, 560px)",
       overflowY: "auto",
-      padding: "12px",
-      background: "#ffffff",
-      border: "1px solid #d1d5db",
+      padding: "clamp(10px, 3vw, 12px)",
+      background: "var(--vims-panel-bg)",
+      border: "1px solid var(--vims-panel-border)",
       borderRadius: "10px",
-      boxShadow: "0 10px 30px rgba(0, 0, 0, 0.25)",
+      boxShadow: "var(--vims-shadow)",
       pointerEvents: "auto",
       textAlign: "left",
     });
     root.appendChild(panel);
+
+    const panelThemes = {
+      light: {
+        "--vims-text": "#111827",
+        "--vims-panel-bg": "#ffffff",
+        "--vims-panel-border": "#d1d5db",
+        "--vims-divider": "#e5e7eb",
+        "--vims-heading-bg": "#f3f4f6",
+        "--vims-label": "#374151",
+        "--vims-hover-bg": "#f3f4f6",
+        "--vims-accent": "#2563eb",
+        "--vims-close": "#4b5563",
+        "--vims-reset-bg": "#f9fafb",
+        "--vims-reset-border": "#d1d5db",
+        "--vims-reset-text": "#111827",
+        "--vims-note": "#6b7280",
+        "--vims-shadow": "0 10px 30px rgba(0, 0, 0, 0.25)",
+      },
+      dark: {
+        "--vims-text": "#f2f2f2",
+        "--vims-panel-bg": "#1f1f1f",
+        "--vims-panel-border": "#4a4a4a",
+        "--vims-divider": "#3a3a3a",
+        "--vims-heading-bg": "#2e2e2e",
+        "--vims-label": "#d4d4d4",
+        "--vims-hover-bg": "#2e2e2e",
+        "--vims-accent": "#7cb7ff",
+        "--vims-close": "#d4d4d4",
+        "--vims-reset-bg": "#2e2e2e",
+        "--vims-reset-border": "#4a4a4a",
+        "--vims-reset-text": "#f2f2f2",
+        "--vims-note": "#a3a3a3",
+        "--vims-shadow": "0 10px 30px rgba(0, 0, 0, 0.5)",
+      },
+    };
+
+    function applyPanelTheme(dark) {
+      const theme = dark ? panelThemes.dark : panelThemes.light;
+      Object.entries(theme).forEach(([name, value]) => {
+        root.style.setProperty(name, value);
+      });
+      panel.style.colorScheme = dark ? "dark" : "light";
+    }
 
     const header = document.createElement("div");
     Object.assign(header.style, {
@@ -875,7 +940,7 @@
       padding: "0 4px",
       border: "none",
       background: "transparent",
-      color: "#4b5563",
+      color: "var(--vims-close)",
       font: "inherit",
       fontSize: "20px",
       lineHeight: "1",
@@ -894,7 +959,7 @@
           : {
               marginTop: "14px",
               paddingTop: "10px",
-              borderTop: "1px solid #e5e7eb",
+              borderTop: "1px solid var(--vims-divider)",
             },
       );
       const heading = document.createElement("div");
@@ -903,8 +968,8 @@
         margin: "0 -4px 6px",
         padding: "5px 8px",
         borderRadius: "4px",
-        background: "#f3f4f6",
-        color: "#111827",
+        background: "var(--vims-heading-bg)",
+        color: "var(--vims-text)",
         fontSize: "11px",
         fontWeight: "700",
         letterSpacing: "0.05em",
@@ -924,11 +989,11 @@
         margin: "0 -4px",
         padding: "4px",
         borderRadius: "4px",
-        color: "#374151",
+        color: "var(--vims-label)",
         cursor: "pointer",
       });
       label.addEventListener("mouseenter", () => {
-        label.style.backgroundColor = "#f3f4f6";
+        label.style.backgroundColor = "var(--vims-hover-bg)";
       });
       label.addEventListener("mouseleave", () => {
         label.style.backgroundColor = "";
@@ -939,7 +1004,7 @@
       Object.assign(input.style, {
         flex: "0 0 auto",
         margin: "2px 0 0",
-        accentColor: "#2563eb",
+        accentColor: "var(--vims-accent)",
       });
       input.addEventListener("change", () => onChange(input.checked));
       const text = document.createElement("span");
@@ -1012,17 +1077,17 @@
     resetButton.textContent = "Reset to defaults";
     Object.assign(resetButton.style, {
       padding: "4px 8px",
-      border: "1px solid #d1d5db",
+      border: "1px solid var(--vims-reset-border)",
       borderRadius: "6px",
-      background: "#f9fafb",
-      color: "#111827",
+      background: "var(--vims-reset-bg)",
+      color: "var(--vims-reset-text)",
       font: "inherit",
       cursor: "pointer",
     });
     const note = document.createElement("span");
     note.textContent = "Saved in this browser";
     Object.assign(note.style, {
-      color: "#6b7280",
+      color: "var(--vims-note)",
       fontSize: "11px",
     });
     footer.append(resetButton, note);
@@ -1195,6 +1260,7 @@
 
     function setOpen(open) {
       if (open) {
+        applyPanelTheme(isDarkReaderDark());
         panel.style.visibility = "hidden";
         panel.style.display = "block";
         positionPanel();
@@ -1336,6 +1402,8 @@
       applyFilters();
     });
 
+    refreshPanelTheme = applyPanelTheme;
+    applyPanelTheme(isDarkReaderDark());
     parent.appendChild(host);
   }
 
@@ -1454,4 +1522,42 @@
   });
 
   observer.observe(document.body, { childList: true, subtree: true });
+
+  // Dark Reader can activate after this script runs, so reapply when its
+  // attributes or injected stylesheet change.
+  let darkReaderTimer = null;
+  function scheduleDarkReaderUpdate() {
+    if (darkReaderTimer) clearTimeout(darkReaderTimer);
+    darkReaderTimer = setTimeout(() => {
+      darkReaderTimer = null;
+      applyFilters();
+    }, 200);
+  }
+
+  const darkReaderRootObserver = new MutationObserver(
+    scheduleDarkReaderUpdate,
+  );
+  darkReaderRootObserver.observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ["data-darkreader-mode", "data-darkreader-scheme"],
+  });
+
+  if (document.head) {
+    const darkReaderHeadObserver = new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        const nodes = [...mutation.addedNodes, ...mutation.removedNodes];
+        for (const node of nodes) {
+          if (!(node instanceof Element)) continue;
+          if (
+            node.id === "dark-reader-style" ||
+            node.classList.contains("darkreader")
+          ) {
+            scheduleDarkReaderUpdate();
+            return;
+          }
+        }
+      }
+    });
+    darkReaderHeadObserver.observe(document.head, { childList: true });
+  }
 })();
