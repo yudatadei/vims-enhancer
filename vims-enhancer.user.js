@@ -1,14 +1,55 @@
 // ==UserScript==
 // @name         VIMS Enhancer
-// @namespace    Violentmonkey Scripts
+// @namespace    tadey
 // @icon         https://vims.moh.go.tz/public/v1770157188524/favicon.ico
-// @version      1.0.0
-// @description  Hides specific blocked items and highlights tables with stripes in VIMS.
-// @author       You
+// @version      1.0.1
+// @description  Hides selected vaccine/product rows and unwanted columns in VIMS tables, and adds zebra stripes to the remaining rows.
+// @license      MIT
+// @author       tadey
 //
 // @match        https://vims.moh.go.tz/*
 // @grant        none
 // ==/UserScript==
+
+/*
+ * Copyright (c) 2026 tadey
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to
+ * deal in the Software without restriction, including without limitation the
+ * rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
+ * sell copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+ * DEALINGS IN THE SOFTWARE.
+ */
+
+/*
+ * VIMS Enhancer
+ *
+ * Features:
+ * - Hides the configured vaccine/product rows (TT, MR-SIAs, IPV-SIAs, ...)
+ *   from VIMS tables, including both halves of split tables.
+ * - Hides unwanted columns (remarks, damage reasons, other facility, days
+ *   without vaccination, coverage percentages) and shortens the long
+ *   "Kipimo cha ugavi" header to "doses/vial".
+ * - Zebra-stripes the remaining rows for readability.
+ * - Keeps split tables aligned and the site's floating table headers sized
+ *   to the live table.
+ * - Re-applies itself after Angular re-renders, window resizes and font load.
+ *
+ * This script makes no network requests, collects no data and has no
+ * external dependencies.
+ */
 
 (function () {
   "use strict";
