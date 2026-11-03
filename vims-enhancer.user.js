@@ -3,7 +3,7 @@
 // @namespace    Violentmonkey Scripts
 // @icon         https://vims.moh.go.tz/public/v1770157188524/favicon.ico
 // @version      1.0.0
-// @description  Hides specific blocked items and stripes tables in VIMS
+// @description  Hides specific blocked items and highlights tables with stripes in VIMS.
 // @author       You
 //
 // @match        https://vims.moh.go.tz/*
@@ -34,7 +34,7 @@
     "HepB Birth dose ndani ya saa 24 (Ndani ya eneo la huduma)",
     "HepB Birth dose baada ya saa 24 hadi saa 48 (Ndani ya eneo la huduma)",
     "HepB Birth dose baada ya saa 24 hadi saa 48 (Nje ya eneo la huduma)",
-    "HepB Birth dose ndani ya saa 24 (Nje ya eneo la huduma)"
+    "HepB Birth dose ndani ya saa 24 (Nje ya eneo la huduma)",
   ].map((s) => s.toLowerCase());
 
   function escapeRegExp(s) {
@@ -64,10 +64,7 @@
 
   function isSingleColHeader(row) {
     if (!row.cells || row.cells.length !== 1) return false;
-    const colspan = parseInt(
-      row.cells[0].getAttribute("colspan") || "1",
-      10,
-    );
+    const colspan = parseInt(row.cells[0].getAttribute("colspan") || "1", 10);
     return colspan > 1;
   }
 
@@ -359,10 +356,7 @@
   function syncRowPair(lr, rr) {
     if (!lr || !rr) return;
     if (lr.style.display === "none" || rr.style.display === "none") return;
-    if (
-      lr.classList.contains("ng-hide") ||
-      rr.classList.contains("ng-hide")
-    )
+    if (lr.classList.contains("ng-hide") || rr.classList.contains("ng-hide"))
       return;
     if (typeof lr.getBoundingClientRect !== "function") return;
     if (lr.dataset.vmsOrigHeight === undefined)
@@ -423,9 +417,7 @@
         );
         if (!srcTable || srcTable.getClientRects().length === 0) return;
         fh.style.width = `${parent.clientWidth}px`;
-        const srcRows = Array.from(
-          srcTable.querySelectorAll("thead > tr"),
-        );
+        const srcRows = Array.from(srcTable.querySelectorAll("thead > tr"));
         const dstRows = Array.from(fh.querySelectorAll("tr"));
         const count = Math.min(srcRows.length, dstRows.length);
         for (let r = 0; r < count; r++) {
@@ -497,8 +489,7 @@
       if (!leftInfo || !rightInfo) return;
       if (
         leftInfo.dataGroupIndices.length > 0 &&
-        leftInfo.dataGroupIndices.length ===
-          rightInfo.dataGroupIndices.length
+        leftInfo.dataGroupIndices.length === rightInfo.dataGroupIndices.length
       ) {
         rightInfo.blockedData = new Set(leftInfo.ownBlockedData);
         stockPairs.push([leftInfo, rightInfo]);
