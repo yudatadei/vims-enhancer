@@ -2,8 +2,8 @@
 // @name         VIMS Enhancer
 // @namespace    tadey
 // @icon         https://vims.moh.go.tz/public/v1770157188524/favicon.ico
-// @version      1.0.1
-// @description  Hides selected vaccine/product rows and unwanted columns in VIMS tables, and adds zebra stripes to the remaining rows.
+// @version      1.0.2
+// @description  Hides selected vaccine/product rows and unwanted columns in VIMS tables, adds zebra stripes, and provides a movable settings panel for choosing what to hide.
 // @license      MIT
 // @author       tadey
 //
@@ -43,8 +43,13 @@
  *   without vaccination, coverage percentages) and shortens the long
  *   "Kipimo cha ugavi" header to "doses/vial".
  * - Zebra-stripes the remaining rows for readability.
+ * - Adds a movable settings cog with a panel for choosing which rows and
+ *   columns to hide and whether rows are striped. Choices are saved in this
+ *   browser; the cog position is remembered too.
  * - Keeps split tables aligned and the site's floating table headers sized
  *   to the live table.
+ * - Makes the fixed action bar at the bottom transparent by default; the
+ *   settings panel can restore the site's default bar.
  * - Re-applies itself after Angular re-renders, window resizes and font load.
  *
  * This script makes no network requests, collects no data and has no
@@ -76,7 +81,71 @@
     "HepB Birth dose baada ya saa 24 hadi saa 48 (Ndani ya eneo la huduma)",
     "HepB Birth dose baada ya saa 24 hadi saa 48 (Nje ya eneo la huduma)",
     "HepB Birth dose ndani ya saa 24 (Nje ya eneo la huduma)",
-  ].map((s) => s.toLowerCase());
+  ].map((label) => ({ label, key: label.toLowerCase() }));
+
+  const SETTINGS_KEY = "vims-enhancer:settings:v1";
+
+  function defaultSettings() {
+    return {
+      rows: Object.create(null),
+      columns: Object.create(null),
+      stripes: true,
+      transparentFooter: true,
+    };
+  }
+
+  function loadSettings() {
+    const result = defaultSettings();
+    let raw;
+    try {
+      raw = localStorage.getItem(SETTINGS_KEY);
+    } catch {
+      return result;
+    }
+    if (!raw) return result;
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return result;
+    }
+    if (!parsed || typeof parsed !== "object") return result;
+    ["rows", "columns"].forEach((section) => {
+      const values = parsed[section];
+      if (!values || typeof values !== "object") return;
+      Object.keys(values).forEach((key) => {
+        if (typeof values[key] === "boolean") {
+          result[section][key] = values[key];
+        }
+      });
+    });
+    if (typeof parsed.stripes === "boolean") result.stripes = parsed.stripes;
+    if (typeof parsed.transparentFooter === "boolean") {
+      result.transparentFooter = parsed.transparentFooter;
+    }
+    return result;
+  }
+
+  let settings = loadSettings();
+
+  function saveSettings() {
+    try {
+      localStorage.setItem(
+        SETTINGS_KEY,
+        JSON.stringify({ version: 1, ...settings }),
+      );
+    } catch {
+      /* ignore unavailable storage */
+    }
+  }
+
+  function isRowEnabled(key) {
+    return settings.rows[key] !== false;
+  }
+
+  function isColumnEnabled(key) {
+    return settings.columns[key] !== false;
+  }
 
   function escapeRegExp(s) {
     return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -84,13 +153,14 @@
 
   function isBlockedLabel(label) {
     const low = label.toLowerCase();
-    return blockedItems.some((item) => {
-      if (!low.includes(item)) return false;
+    return blockedItems.some(({ key }) => {
+      if (!isRowEnabled(key)) return false;
+      if (!low.includes(key)) return false;
       // Short codes like "TT" would false-positive on any "tt" substring
       // (e.g. "bottle"). Require a whole-word match for short items.
-      if (item.length <= 3) {
+      if (key.length <= 3) {
         try {
-          return new RegExp(`\\b${escapeRegExp(item)}\\b`, "i").test(label);
+          return new RegExp(`\\b${escapeRegExp(key)}\\b`, "i").test(label);
         } catch {
           return false;
         }
@@ -213,12 +283,22 @@
   // header text, so minor punctuation differences (e.g. trailing * or **)
   // don't matter.
   const blockedColumnMatchers = [
+    "remarks",
     "kiwango ch", // all monthly-coverage % columns (W1/W2/W3/Td variants)
     "zilizoharibika kabla ya kufunguliwa",
     "sababu ya kuharibika",
     "kituo kingine",
     "siku ambazo chanjo hazikuwepo",
   ];
+
+  const columnLabels = {
+    remarks: "Remarks",
+    "kiwango ch": "Coverage % columns",
+    "zilizoharibika kabla ya kufunguliwa": "Damaged before opening",
+    "sababu ya kuharibika": "Reason for damage",
+    "kituo kingine": "Other facility",
+    "siku ambazo chanjo hazikuwepo": "Days without vaccination",
+  };
 
   function normText(s) {
     return (s || "").toLowerCase().replace(/\s+/g, " ").trim();
@@ -227,8 +307,10 @@
   function thMatchesBlocked(th) {
     const t = normText(th.textContent);
     if (!t) return false;
-    if (t === "remarks") return true;
-    return blockedColumnMatchers.some((m) => t.includes(m));
+    return blockedColumnMatchers.some((m) => {
+      if (!isColumnEnabled(m)) return false;
+      return m === "remarks" ? t === "remarks" : t.includes(m);
+    });
   }
 
   function getTheadRows(table) {
@@ -379,8 +461,13 @@
               }
             }
           });
-        } else if (hideLastCol && cells.length > 0) {
-          cells[cells.length - 1].style.display = "none";
+        } else if (cells.length > 0) {
+          const lastCell = cells[cells.length - 1];
+          if (hideLastCol) {
+            lastCell.style.display = "none";
+          } else if (lastCell.style.display === "none") {
+            lastCell.style.display = "";
+          }
         }
       });
     });
@@ -480,6 +567,88 @@
         /* ignore */
       }
     });
+  }
+
+  const actionBarStates = new WeakMap();
+
+  function readActionBarBackground(style) {
+    return {
+      background: style.getPropertyValue("background"),
+      backgroundPriority: style.getPropertyPriority("background"),
+      backgroundColor: style.getPropertyValue("background-color"),
+      backgroundColorPriority: style.getPropertyPriority("background-color"),
+    };
+  }
+
+  function restoreInlineProperty(style, name, value, priority) {
+    if (value) {
+      style.setProperty(name, value, priority);
+    } else {
+      style.removeProperty(name);
+    }
+  }
+
+  function applyActionBarStyle() {
+    const bar = document.getElementById("action_buttons");
+    if (!bar) return;
+    let state = actionBarStates.get(bar);
+
+    if (settings.transparentFooter) {
+      if (!state) {
+        state = {
+          original: readActionBarBackground(bar.style),
+          applied: null,
+        };
+        actionBarStates.set(bar, state);
+      } else if (state.applied) {
+        const current = readActionBarBackground(bar.style);
+        if (
+          current.background !== state.applied.background ||
+          current.backgroundPriority !== state.applied.backgroundPriority
+        ) {
+          state.original.background = current.background;
+          state.original.backgroundPriority = current.backgroundPriority;
+        }
+        if (
+          current.backgroundColor !== state.applied.backgroundColor ||
+          current.backgroundColorPriority !== state.applied.backgroundColorPriority
+        ) {
+          state.original.backgroundColor = current.backgroundColor;
+          state.original.backgroundColorPriority =
+            current.backgroundColorPriority;
+        }
+      }
+      bar.style.setProperty("background", "transparent", "important");
+      bar.style.setProperty("background-color", "transparent", "important");
+      state.applied = readActionBarBackground(bar.style);
+      return;
+    }
+
+    if (!state || !state.applied) return;
+    const current = readActionBarBackground(bar.style);
+    if (
+      current.background === state.applied.background &&
+      current.backgroundPriority === state.applied.backgroundPriority
+    ) {
+      restoreInlineProperty(
+        bar.style,
+        "background",
+        state.original.background,
+        state.original.backgroundPriority,
+      );
+    }
+    if (
+      current.backgroundColor === state.applied.backgroundColor &&
+      current.backgroundColorPriority === state.applied.backgroundColorPriority
+    ) {
+      restoreInlineProperty(
+        bar.style,
+        "background-color",
+        state.original.backgroundColor,
+        state.original.backgroundColorPriority,
+      );
+    }
+    actionBarStates.delete(bar);
   }
 
   function applyFilters() {
@@ -589,15 +758,23 @@
             row.style.display = "none";
           } else {
             row.style.display = "";
-            const bg = stripe ? "#e5e7eb" : "#ffffff";
-            row.style.backgroundColor = bg;
-            Array.from(row.cells).forEach((c) => {
-              c.style.backgroundColor = "transparent";
-              c.style.color = "#111827";
-            });
+            const cells = Array.from(row.cells);
+            if (settings.stripes) {
+              row.style.backgroundColor = stripe ? "#e5e7eb" : "#ffffff";
+              cells.forEach((c) => {
+                c.style.backgroundColor = "transparent";
+                c.style.color = "#111827";
+              });
+            } else {
+              row.style.backgroundColor = "";
+              cells.forEach((c) => {
+                c.style.backgroundColor = "";
+                c.style.color = "";
+              });
+            }
           }
         });
-        if (!blocked) stripe = !stripe;
+        if (!blocked && settings.stripes) stripe = !stripe;
       });
     });
 
@@ -612,7 +789,554 @@
     // Layout can settle after this run (webfonts, late Angular rendering,
     // or a hidden tab revealed later without any DOM insertion, which the
     // MutationObserver never sees). Re-sync once painting is done.
+    applyActionBarStyle();
     scheduleSync();
+  }
+
+  function mountSettingsPanel() {
+    if (document.getElementById("vims-enhancer-panel")) return;
+    const parent = document.body || document.documentElement;
+    if (!parent) return;
+
+    const POSITION_KEY = "vims-enhancer:button-position:v1";
+    const BUTTON_SIZE = 44;
+    const UI_MARGIN = 12;
+    const DRAG_THRESHOLD = 5;
+
+    const host = document.createElement("div");
+    host.id = "vims-enhancer-panel";
+    Object.assign(host.style, {
+      position: "fixed",
+      top: "0",
+      right: "0",
+      bottom: "0",
+      left: "0",
+      zIndex: "2147483647",
+      pointerEvents: "none",
+    });
+    if (typeof host.attachShadow !== "function") return;
+    const shadow = host.attachShadow({ mode: "open" });
+
+    const root = document.createElement("div");
+    Object.assign(root.style, {
+      position: "absolute",
+      top: "0",
+      right: "0",
+      bottom: "0",
+      left: "0",
+      pointerEvents: "none",
+      fontFamily:
+        'system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
+      fontSize: "13px",
+      lineHeight: "1.4",
+      color: "#111827",
+    });
+    shadow.appendChild(root);
+
+    const panel = document.createElement("div");
+    panel.id = "vims-enhancer-settings-panel";
+    panel.setAttribute("role", "dialog");
+    panel.setAttribute("aria-label", "VIMS Enhancer settings");
+    Object.assign(panel.style, {
+      display: "none",
+      position: "absolute",
+      zIndex: "1",
+      boxSizing: "border-box",
+      width: "360px",
+      maxWidth: "calc(100vw - 24px)",
+      maxHeight: "70vh",
+      overflowY: "auto",
+      padding: "12px",
+      background: "#ffffff",
+      border: "1px solid #d1d5db",
+      borderRadius: "10px",
+      boxShadow: "0 10px 30px rgba(0, 0, 0, 0.25)",
+      pointerEvents: "auto",
+      textAlign: "left",
+    });
+    root.appendChild(panel);
+
+    const header = document.createElement("div");
+    Object.assign(header.style, {
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "space-between",
+      gap: "8px",
+      marginBottom: "6px",
+    });
+    const title = document.createElement("strong");
+    title.textContent = "VIMS Enhancer settings";
+    title.style.fontSize = "14px";
+    const closeButton = document.createElement("button");
+    closeButton.type = "button";
+    closeButton.textContent = "\u00d7";
+    closeButton.setAttribute("aria-label", "Close settings");
+    Object.assign(closeButton.style, {
+      padding: "0 4px",
+      border: "none",
+      background: "transparent",
+      color: "#4b5563",
+      font: "inherit",
+      fontSize: "20px",
+      lineHeight: "1",
+      cursor: "pointer",
+    });
+    header.append(title, closeButton);
+    panel.appendChild(header);
+
+    function addSection(titleText) {
+      const first = panel.querySelectorAll("section").length === 0;
+      const section = document.createElement("section");
+      Object.assign(
+        section.style,
+        first
+          ? { marginTop: "8px" }
+          : {
+              marginTop: "14px",
+              paddingTop: "10px",
+              borderTop: "1px solid #e5e7eb",
+            },
+      );
+      const heading = document.createElement("div");
+      heading.textContent = titleText;
+      Object.assign(heading.style, {
+        margin: "0 -4px 6px",
+        padding: "5px 8px",
+        borderRadius: "4px",
+        background: "#f3f4f6",
+        color: "#111827",
+        fontSize: "11px",
+        fontWeight: "700",
+        letterSpacing: "0.05em",
+        textTransform: "uppercase",
+      });
+      section.appendChild(heading);
+      panel.appendChild(section);
+      return section;
+    }
+
+    function addCheckbox(parent, labelText, checked, onChange) {
+      const label = document.createElement("label");
+      Object.assign(label.style, {
+        display: "flex",
+        alignItems: "flex-start",
+        gap: "6px",
+        margin: "0 -4px",
+        padding: "4px",
+        borderRadius: "4px",
+        color: "#374151",
+        cursor: "pointer",
+      });
+      label.addEventListener("mouseenter", () => {
+        label.style.backgroundColor = "#f3f4f6";
+      });
+      label.addEventListener("mouseleave", () => {
+        label.style.backgroundColor = "";
+      });
+      const input = document.createElement("input");
+      input.type = "checkbox";
+      input.checked = checked;
+      Object.assign(input.style, {
+        flex: "0 0 auto",
+        margin: "2px 0 0",
+        accentColor: "#2563eb",
+      });
+      input.addEventListener("change", () => onChange(input.checked));
+      const text = document.createElement("span");
+      text.textContent = labelText;
+      label.append(input, text);
+      parent.appendChild(label);
+      return input;
+    }
+
+    const rowsSection = addSection("Rows to hide");
+    const rowInputs = blockedItems.map((item) =>
+      addCheckbox(
+        rowsSection,
+        item.label,
+        isRowEnabled(item.key),
+        (checked) => {
+          settings.rows[item.key] = checked;
+          saveSettings();
+          applyFilters();
+        },
+      ),
+    );
+
+    const columnsSection = addSection("Columns to hide");
+    const columnInputs = blockedColumnMatchers.map((key) =>
+      addCheckbox(
+        columnsSection,
+        columnLabels[key] || key,
+        isColumnEnabled(key),
+        (checked) => {
+          settings.columns[key] = checked;
+          saveSettings();
+          applyFilters();
+        },
+      ),
+    );
+
+    const displaySection = addSection("Display");
+    const stripesInput = addCheckbox(
+      displaySection,
+      "Zebra-stripe rows",
+      settings.stripes,
+      (checked) => {
+        settings.stripes = checked;
+        saveSettings();
+        applyFilters();
+      },
+    );
+    const transparentFooterInput = addCheckbox(
+      displaySection,
+      "Transparent footer",
+      settings.transparentFooter,
+      (checked) => {
+        settings.transparentFooter = checked;
+        saveSettings();
+        applyActionBarStyle();
+      },
+    );
+
+    const footer = document.createElement("div");
+    Object.assign(footer.style, {
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "space-between",
+      gap: "8px",
+      marginTop: "12px",
+    });
+    const resetButton = document.createElement("button");
+    resetButton.type = "button";
+    resetButton.textContent = "Reset to defaults";
+    Object.assign(resetButton.style, {
+      padding: "4px 8px",
+      border: "1px solid #d1d5db",
+      borderRadius: "6px",
+      background: "#f9fafb",
+      color: "#111827",
+      font: "inherit",
+      cursor: "pointer",
+    });
+    const note = document.createElement("span");
+    note.textContent = "Saved in this browser";
+    Object.assign(note.style, {
+      color: "#6b7280",
+      fontSize: "11px",
+    });
+    footer.append(resetButton, note);
+    panel.appendChild(footer);
+
+    function createGearIcon() {
+      const svgNs = "http://www.w3.org/2000/svg";
+      const svg = document.createElementNS(svgNs, "svg");
+      svg.setAttribute("viewBox", "0 0 24 24");
+      svg.setAttribute("width", "22");
+      svg.setAttribute("height", "22");
+      svg.setAttribute("fill", "none");
+      svg.setAttribute("stroke", "currentColor");
+      svg.setAttribute("stroke-width", "2");
+      svg.setAttribute("stroke-linecap", "round");
+      svg.setAttribute("stroke-linejoin", "round");
+      svg.setAttribute("aria-hidden", "true");
+      svg.style.display = "block";
+      svg.style.pointerEvents = "none";
+
+      const outer = document.createElementNS(svgNs, "circle");
+      outer.setAttribute("cx", "12");
+      outer.setAttribute("cy", "12");
+      outer.setAttribute("r", "6");
+      const inner = document.createElementNS(svgNs, "circle");
+      inner.setAttribute("cx", "12");
+      inner.setAttribute("cy", "12");
+      inner.setAttribute("r", "2.5");
+      svg.append(outer, inner);
+
+      [
+        [12, 6, 12, 3],
+        [16.24, 7.76, 18.36, 5.64],
+        [18, 12, 21, 12],
+        [16.24, 16.24, 18.36, 18.36],
+        [12, 18, 12, 21],
+        [7.76, 16.24, 5.64, 18.36],
+        [6, 12, 3, 12],
+        [7.76, 7.76, 5.64, 5.64],
+      ].forEach(([x1, y1, x2, y2]) => {
+        const line = document.createElementNS(svgNs, "line");
+        line.setAttribute("x1", String(x1));
+        line.setAttribute("y1", String(y1));
+        line.setAttribute("x2", String(x2));
+        line.setAttribute("y2", String(y2));
+        line.setAttribute("stroke-width", "2.4");
+        svg.appendChild(line);
+      });
+      return svg;
+    }
+
+    function viewportSize() {
+      return {
+        width: document.documentElement.clientWidth || window.innerWidth,
+        height: document.documentElement.clientHeight || window.innerHeight,
+      };
+    }
+
+    let buttonLeft = 0;
+    let buttonTop = 0;
+
+    function setButtonPosition(left, top) {
+      const size = viewportSize();
+      const maxLeft = Math.max(UI_MARGIN, size.width - BUTTON_SIZE - UI_MARGIN);
+      const maxTop = Math.max(UI_MARGIN, size.height - BUTTON_SIZE - UI_MARGIN);
+      buttonLeft = Math.min(Math.max(left, UI_MARGIN), maxLeft);
+      buttonTop = Math.min(Math.max(top, UI_MARGIN), maxTop);
+      toggleButton.style.left = `${Math.round(buttonLeft)}px`;
+      toggleButton.style.top = `${Math.round(buttonTop)}px`;
+    }
+
+    function loadButtonPosition() {
+      try {
+        const raw = localStorage.getItem(POSITION_KEY);
+        if (!raw) return null;
+        const parsed = JSON.parse(raw);
+        if (
+          parsed &&
+          typeof parsed === "object" &&
+          Number.isFinite(parsed.left) &&
+          Number.isFinite(parsed.top)
+        ) {
+          return { left: parsed.left, top: parsed.top };
+        }
+      } catch {
+        /* ignore */
+      }
+      return null;
+    }
+
+    function saveButtonPosition() {
+      try {
+        localStorage.setItem(
+          POSITION_KEY,
+          JSON.stringify({
+            left: Math.round(buttonLeft),
+            top: Math.round(buttonTop),
+          }),
+        );
+      } catch {
+        /* ignore */
+      }
+    }
+
+    function positionPanel() {
+      if (panel.style.display === "none") return;
+      panel.style.visibility = "hidden";
+      const buttonRect = toggleButton.getBoundingClientRect();
+      const panelRect = panel.getBoundingClientRect();
+      const size = viewportSize();
+      const gap = 8;
+      let left = buttonRect.right - panelRect.width;
+      left = Math.min(
+        Math.max(left, UI_MARGIN),
+        Math.max(UI_MARGIN, size.width - panelRect.width - UI_MARGIN),
+      );
+      let top = buttonRect.top - panelRect.height - gap;
+      if (top < UI_MARGIN) top = buttonRect.bottom + gap;
+      if (top + panelRect.height > size.height - UI_MARGIN) {
+        top = Math.max(UI_MARGIN, size.height - panelRect.height - UI_MARGIN);
+      }
+      panel.style.left = `${Math.round(left)}px`;
+      panel.style.top = `${Math.round(top)}px`;
+      panel.style.visibility = "";
+    }
+
+    const toggleButton = document.createElement("button");
+    toggleButton.type = "button";
+    toggleButton.title = "Drag to move \u00b7 Click for settings";
+    toggleButton.setAttribute("aria-label", "Open VIMS Enhancer settings");
+    toggleButton.setAttribute("aria-expanded", "false");
+    toggleButton.setAttribute("aria-haspopup", "dialog");
+    toggleButton.setAttribute("aria-controls", "vims-enhancer-settings-panel");
+    Object.assign(toggleButton.style, {
+      position: "absolute",
+      zIndex: "2",
+      left: "0",
+      top: "0",
+      width: `${BUTTON_SIZE}px`,
+      height: `${BUTTON_SIZE}px`,
+      boxSizing: "border-box",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      padding: "0",
+      border: "1px solid #6b7280",
+      borderRadius: "999px",
+      background: "#ffffff",
+      color: "#111827",
+      font: "inherit",
+      cursor: "grab",
+      boxShadow: "0 2px 10px rgba(0, 0, 0, 0.35)",
+      pointerEvents: "auto",
+      touchAction: "none",
+      userSelect: "none",
+    });
+    toggleButton.appendChild(createGearIcon());
+    root.insertBefore(toggleButton, panel);
+
+    const savedPosition = loadButtonPosition();
+    if (savedPosition) {
+      setButtonPosition(savedPosition.left, savedPosition.top);
+    } else {
+      const size = viewportSize();
+      setButtonPosition(
+        size.width - BUTTON_SIZE - UI_MARGIN,
+        size.height - BUTTON_SIZE - UI_MARGIN,
+      );
+    }
+
+    function setOpen(open) {
+      if (open) {
+        panel.style.visibility = "hidden";
+        panel.style.display = "block";
+        positionPanel();
+      } else {
+        panel.style.display = "none";
+        panel.style.visibility = "";
+      }
+      toggleButton.setAttribute("aria-expanded", String(open));
+      toggleButton.setAttribute(
+        "aria-label",
+        open ? "Close VIMS Enhancer settings" : "Open VIMS Enhancer settings",
+      );
+    }
+
+    function handleResize() {
+      setButtonPosition(buttonLeft, buttonTop);
+      positionPanel();
+    }
+    window.addEventListener("resize", handleResize);
+
+    toggleButton.addEventListener("mouseenter", () => {
+      toggleButton.style.background = "#f3f4f6";
+    });
+    toggleButton.addEventListener("mouseleave", () => {
+      toggleButton.style.background = "#ffffff";
+    });
+    toggleButton.addEventListener("focus", () => {
+      toggleButton.style.outline = "2px solid #2563eb";
+      toggleButton.style.outlineOffset = "2px";
+      toggleButton.style.boxShadow =
+        "0 0 0 3px rgba(37, 99, 235, 0.45), 0 2px 10px rgba(0, 0, 0, 0.35)";
+    });
+    toggleButton.addEventListener("blur", () => {
+      toggleButton.style.outline = "";
+      toggleButton.style.outlineOffset = "";
+      toggleButton.style.boxShadow = "0 2px 10px rgba(0, 0, 0, 0.35)";
+    });
+
+    let dragState = null;
+
+    function finishDrag(event, allowToggle) {
+      if (!dragState || event.pointerId !== dragState.pointerId) return;
+      const moved = dragState.moved;
+      dragState = null;
+      toggleButton.style.cursor = "grab";
+      try {
+        toggleButton.releasePointerCapture(event.pointerId);
+      } catch {
+        /* ignore */
+      }
+      if (moved) {
+        saveButtonPosition();
+      } else if (allowToggle) {
+        setOpen(panel.style.display === "none");
+      }
+    }
+
+    toggleButton.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0 || dragState) return;
+      const rect = toggleButton.getBoundingClientRect();
+      dragState = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        left: rect.left,
+        top: rect.top,
+        moved: false,
+      };
+      try {
+        toggleButton.setPointerCapture(event.pointerId);
+      } catch {
+        /* ignore */
+      }
+    });
+
+    toggleButton.addEventListener("pointermove", (event) => {
+      if (!dragState || event.pointerId !== dragState.pointerId) return;
+      const dx = event.clientX - dragState.startX;
+      const dy = event.clientY - dragState.startY;
+      if (!dragState.moved) {
+        if (Math.hypot(dx, dy) < DRAG_THRESHOLD) return;
+        dragState.moved = true;
+        setOpen(false);
+        toggleButton.style.cursor = "grabbing";
+      }
+      setButtonPosition(dragState.left + dx, dragState.top + dy);
+      event.preventDefault();
+    });
+
+    toggleButton.addEventListener("pointerup", (event) =>
+      finishDrag(event, true),
+    );
+    toggleButton.addEventListener("pointercancel", (event) =>
+      finishDrag(event, false),
+    );
+    toggleButton.addEventListener("lostpointercapture", () => {
+      if (!dragState) return;
+      if (dragState.moved) saveButtonPosition();
+      dragState = null;
+      toggleButton.style.cursor = "grab";
+    });
+
+    toggleButton.addEventListener("click", (event) => {
+      if (event.detail !== 0 || dragState) return;
+      setOpen(panel.style.display === "none");
+    });
+
+    closeButton.addEventListener("click", () => setOpen(false));
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && panel.style.display !== "none") {
+        setOpen(false);
+      }
+    });
+    document.addEventListener(
+      "pointerdown",
+      (event) => {
+        if (panel.style.display === "none") return;
+        const inside =
+          typeof event.composedPath === "function"
+            ? event.composedPath().includes(host)
+            : host.contains(event.target);
+        if (!inside) setOpen(false);
+      },
+      true,
+    );
+
+    resetButton.addEventListener("click", () => {
+      settings = defaultSettings();
+      saveSettings();
+      blockedItems.forEach((item, index) => {
+        rowInputs[index].checked = isRowEnabled(item.key);
+      });
+      blockedColumnMatchers.forEach((key, index) => {
+        columnInputs[index].checked = isColumnEnabled(key);
+      });
+      stripesInput.checked = settings.stripes;
+      transparentFooterInput.checked = settings.transparentFooter;
+      applyActionBarStyle();
+      applyFilters();
+    });
+
+    parent.appendChild(host);
   }
 
   let lastPairs = [];
@@ -671,6 +1395,7 @@
   }
 
   applyFilters();
+  mountSettingsPanel();
 
   let resizeTimer = null;
   window.addEventListener("resize", () => {
