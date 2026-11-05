@@ -2,8 +2,8 @@
 // @name         VIMS Enhancer
 // @namespace    tadey
 // @icon         https://vims.moh.go.tz/public/v1770157188524/favicon.ico
-// @version      1.0.3
-// @description  Hides selected vaccine/product rows and unwanted columns in VIMS tables, adds zebra stripes, and provides a movable settings panel for choosing what to hide.
+// @version      1.0.4
+// @description  Lets you choose which vaccine/supply rows and columns are shown in VIMS tables, adds zebra stripes, and provides a movable tabbed settings panel.
 // @license      MIT
 // @author       tadey
 //
@@ -37,15 +37,16 @@
  * VIMS Enhancer
  *
  * Features:
- * - Hides the configured vaccine/product rows (TT, MR-SIAs, IPV-SIAs, ...)
- *   from VIMS tables, including both halves of split tables.
+ * - Shows or hides vaccine and supply rows from VIMS tables, including both
+ *   halves of split tables. Users choose from the full catalog in the settings
+ *   panel; unchecked items stay hidden.
  * - Hides unwanted columns (remarks, damage reasons, other facility, days
  *   without vaccination, coverage percentages) and shortens the long
  *   "Kipimo cha ugavi" header to "doses/vial".
  * - Zebra-stripes the remaining rows for readability.
- * - Adds a movable settings cog with a panel for choosing which rows and
- *   columns to hide and whether rows are striped. Choices are saved in this
- *   browser; the cog position is remembered too.
+ * - Adds a movable settings cog with a tabbed panel for choosing which
+ *   vaccine/supply rows and columns are shown and whether rows are striped.
+ *   Choices are saved in this browser; the cog position is remembered too.
  * - Keeps split tables aligned and the site's floating table headers sized
  *   to the live table.
  * - Makes the fixed action bar at the bottom transparent by default; the
@@ -59,36 +60,134 @@
 (function () {
   "use strict";
 
-  const blockedItems = [
-    "TT",
-    "MR-SIAs",
-    "IPV-SIAs",
-    "RUP_2ml dilution syringe",
-    "Watoto waliopata dawa Kinga ya HBIG",
-    "ADS_0.3 ml",
-    "Janssen/Johnson & Johnson",
-    "Sinopharm BBIBP-1",
-    "Watoto waliopata dawa kinga ya HBIG baada ya kuzaliwa",
-    "Pfizer-BioNTech",
-    "Sinopharm BBIBP-2",
-    "Diluent for Pfizer-BioNTec",
-    // "Rotavac",
-    "Moderna",
-    "Sinovac-CoronaVac",
-    "nOPV2",
-    "Droppers for nOPV2",
-    "HepB Birth dose ndani ya saa 24 (Ndani ya eneo la huduma)",
-    "HepB Birth dose baada ya saa 24 hadi saa 48 (Ndani ya eneo la huduma)",
-    "HepB Birth dose baada ya saa 24 hadi saa 48 (Nje ya eneo la huduma)",
-    "HepB Birth dose ndani ya saa 24 (Nje ya eneo la huduma)",
-  ].map((label) => ({ label, key: label.toLowerCase() }));
+  // Product catalog embedded from VIMS. Rows are matched by name (see
+  // findRowTarget); ids keep saved visibility stable if the order changes.
+  const PRODUCT_ITEMS = [
+    { id: 2422, name: "ADS_0.05ml", categoryId: 101 },
+    { id: 2451, name: "ADS_0.3 ml", categoryId: 101 },
+    { id: 2423, name: "ADS_0.5ml", categoryId: 101 },
+    { id: 2412, name: "BCG", categoryId: 100 },
+    { id: 2421, name: "DTP-HepB-Hib", categoryId: 100 },
+    {
+      id: 2450,
+      name: "Diluent for Pfizer-BioNTech",
+      categoryId: 100,
+      tab: "supplies",
+      aliases: ["Diluent for Pfizer-BioNTec"],
+    },
+    { id: 2433, name: "Diluents for BCG", categoryId: 100, tab: "supplies" },
+    { id: 2442, name: "Diluents for MR", categoryId: 100, tab: "supplies" },
+    { id: 2453, name: "Droppers for Rota", categoryId: 100, tab: "supplies" },
+    { id: 2443, name: "Droppers for bOPV", categoryId: 100, tab: "supplies" },
+    { id: 2455, name: "Droppers for nOPV2", categoryId: 100, tab: "supplies" },
+    { id: 2429, name: "HPV", categoryId: 100 },
+    { id: 2417, name: "IPV", categoryId: 100 },
+    { id: 2444, name: "Janssen/Johnson & Johnson", categoryId: 100 },
+    { id: 2420, name: "MR", categoryId: 100 },
+    { id: 2434, name: "MR-SIAs", categoryId: 100 },
+    { id: 2447, name: "Moderna", categoryId: 100 },
+    { id: 2415, name: "PCV-13", categoryId: 100 },
+    { id: 2446, name: "Pfizer-BioNTech", categoryId: 100 },
+    {
+      id: 2424,
+      name: "RUP_2ml dilution syringe",
+      categoryId: 101,
+    },
+    { id: 2416, name: "Rotarix", categoryId: 100 },
+    { id: 2452, name: "Rotavac", categoryId: 100 },
+    { id: 2426, name: "Safety boxes", categoryId: 101 },
+    { id: 2425, name: "Sdilution_5ml", categoryId: 101 },
+    { id: 2445, name: "Sinopharm BBIBP-1", categoryId: 100 },
+    { id: 2449, name: "Sinopharm BBIBP-2", categoryId: 100 },
+    { id: 2448, name: "Sinovac-CoronaVac", categoryId: 100 },
+    { id: 2441, name: "Td", categoryId: 100 },
+    { id: 2413, name: "bOPV", categoryId: 100 },
+    { id: 2454, name: "nOPV2", categoryId: 100 },
+  ];
+
+  // Campaign vaccines (SIAs) and birth-dose rows are listed under Vaccines
+  // and stay hidden until selected.
+  const EXTRA_ITEMS = [
+    { key: "tt", name: "TT", categoryId: 100 },
+    { key: "ipv-sias", name: "IPV-SIAs", categoryId: 100 },
+    {
+      key: "hbig",
+      name: "Watoto waliopata dawa Kinga ya HBIG",
+      categoryId: 100,
+    },
+    {
+      key: "hbig-after-birth",
+      name: "Watoto waliopata dawa kinga ya HBIG baada ya kuzaliwa",
+      categoryId: 100,
+    },
+    {
+      key: "hepb-24-in",
+      name: "HepB Birth dose ndani ya saa 24 (Ndani ya eneo la huduma)",
+      categoryId: 100,
+    },
+    {
+      key: "hepb-24-48-in",
+      name: "HepB Birth dose baada ya saa 24 hadi saa 48 (Ndani ya eneo la huduma)",
+      categoryId: 100,
+    },
+    {
+      key: "hepb-24-48-out",
+      name: "HepB Birth dose baada ya saa 24 hadi saa 48 (Nje ya eneo la huduma)",
+      categoryId: 100,
+    },
+    {
+      key: "hepb-24-out",
+      name: "HepB Birth dose ndani ya saa 24 (Nje ya eneo la huduma)",
+      categoryId: 100,
+    },
+  ];
+
+  const CATALOG = [...PRODUCT_ITEMS, ...EXTRA_ITEMS];
 
   const SETTINGS_KEY = "vims-enhancer:settings:v1";
 
+  const DEFAULT_HIDDEN_ITEM_IDS = new Set([
+    2434, 2424, 2451, 2444, 2445, 2446, 2449, 2450, 2452, 2447, 2448, 2454,
+    2455,
+  ]);
+
+  function rowKey(row) {
+    return row.id !== undefined ? `item:${row.id}` : `extra:${row.key}`;
+  }
+
+  function isDefaultVisible(row) {
+    if (row.id === undefined) return false;
+    return !DEFAULT_HIDDEN_ITEM_IDS.has(row.id);
+  }
+
+  // VIMS files droppers and diluents under category 100; the tab override
+  // keeps them out of the Vaccines list.
+  function rowTab(row) {
+    return row.tab || (row.categoryId === 101 ? "supplies" : "vaccines");
+  }
+
+  function sortCatalogRows(rows) {
+    return rows.slice().sort((a, b) => {
+      const aShown = isDefaultVisible(a);
+      const bShown = isDefaultVisible(b);
+      if (aShown !== bShown) return aShown ? -1 : 1;
+      return a.name.localeCompare(b.name, undefined, {
+        sensitivity: "base",
+      });
+    });
+  }
+
   function defaultSettings() {
+    const visibleRows = Object.create(null);
+    PRODUCT_ITEMS.forEach((item) => {
+      visibleRows[rowKey(item)] = isDefaultVisible(item);
+    });
+    EXTRA_ITEMS.forEach((item) => {
+      visibleRows[rowKey(item)] = false;
+    });
     return {
-      rows: Object.create(null),
-      columns: Object.create(null),
+      visibleRows,
+      visibleColumns: Object.create(null),
       stripes: true,
       transparentFooter: true,
     };
@@ -110,15 +209,33 @@
       return result;
     }
     if (!parsed || typeof parsed !== "object") return result;
-    ["rows", "columns"].forEach((section) => {
-      const values = parsed[section];
-      if (!values || typeof values !== "object") return;
-      Object.keys(values).forEach((key) => {
-        if (typeof values[key] === "boolean") {
-          result[section][key] = values[key];
+
+    const visibleRows = parsed.visibleRows;
+    if (visibleRows && typeof visibleRows === "object") {
+      Object.keys(visibleRows).forEach((key) => {
+        if (typeof visibleRows[key] === "boolean" && key in result.visibleRows) {
+          result.visibleRows[key] = visibleRows[key];
         }
       });
-    });
+    }
+
+    const visibleColumns = parsed.visibleColumns;
+    if (visibleColumns && typeof visibleColumns === "object") {
+      Object.keys(visibleColumns).forEach((key) => {
+        if (typeof visibleColumns[key] === "boolean") {
+          result.visibleColumns[key] = visibleColumns[key];
+        }
+      });
+    } else {
+      const legacyColumns = parsed.columns;
+      if (legacyColumns && typeof legacyColumns === "object") {
+        Object.keys(legacyColumns).forEach((key) => {
+          if (typeof legacyColumns[key] === "boolean") {
+            result.visibleColumns[key] = !legacyColumns[key];
+          }
+        });
+      }
+    }
     if (typeof parsed.stripes === "boolean") result.stripes = parsed.stripes;
     if (typeof parsed.transparentFooter === "boolean") {
       result.transparentFooter = parsed.transparentFooter;
@@ -131,43 +248,18 @@
 
   function saveSettings() {
     try {
-      localStorage.setItem(
-        SETTINGS_KEY,
-        JSON.stringify({ version: 1, ...settings }),
-      );
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
     } catch {
       /* ignore unavailable storage */
     }
   }
 
-  function isRowEnabled(key) {
-    return settings.rows[key] !== false;
+  function isRowVisible(key) {
+    return settings.visibleRows[key] !== false;
   }
 
-  function isColumnEnabled(key) {
-    return settings.columns[key] !== false;
-  }
-
-  function escapeRegExp(s) {
-    return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  }
-
-  function isBlockedLabel(label) {
-    const low = label.toLowerCase();
-    return blockedItems.some(({ key }) => {
-      if (!isRowEnabled(key)) return false;
-      if (!low.includes(key)) return false;
-      // Short codes like "TT" would false-positive on any "tt" substring
-      // (e.g. "bottle"). Require a whole-word match for short items.
-      if (key.length <= 3) {
-        try {
-          return new RegExp(`\\b${escapeRegExp(key)}\\b`, "i").test(label);
-        } catch {
-          return false;
-        }
-      }
-      return true;
-    });
+  function isColumnVisible(key) {
+    return settings.visibleColumns[key] === true;
   }
 
   function rowHasInputs(row) {
@@ -280,10 +372,10 @@
   }
 
   // ---- column visibility ----
-  // Matchers run against normalized (lowercased, whitespace-collapsed)
-  // header text, so minor punctuation differences (e.g. trailing * or **)
-  // don't matter.
-  const blockedColumnMatchers = [
+  // These column groups are hidden unless checked in settings. Matchers run
+  // against normalized (lowercased, whitespace-collapsed) header text, so
+  // minor punctuation differences (e.g. trailing * or **) don't matter.
+  const columnMatchers = [
     "remarks",
     "kiwango ch", // all monthly-coverage % columns (W1/W2/W3/Td variants)
     "zilizoharibika kabla ya kufunguliwa",
@@ -305,11 +397,66 @@
     return (s || "").toLowerCase().replace(/\s+/g, " ").trim();
   }
 
-  function thMatchesBlocked(th) {
+  function compactText(s) {
+    return normText(s).replace(/[^a-z0-9]+/g, "");
+  }
+
+  function escapeRegExp(s) {
+    return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+
+  // Longest match wins so specific rows (MR-SIAs, Droppers for bOPV) are not
+  // swallowed by shorter product names (MR, bOPV).
+  const ROW_TARGETS = CATALOG.map((row) => ({
+    key: rowKey(row),
+    names: [row.name]
+      .concat(row.aliases || [])
+      .map((name) => ({
+        normalized: normText(name),
+        compact: compactText(name),
+      })),
+  }));
+
+  function rowNameMatches(name, label, compactLabel) {
+    if (name.normalized.length <= 3) {
+      try {
+        return new RegExp(
+          `\\b${escapeRegExp(name.normalized)}\\b`,
+          "i",
+        ).test(label);
+      } catch {
+        return false;
+      }
+    }
+    return compactLabel.includes(name.compact);
+  }
+
+  function findRowTarget(label) {
+    const normalized = normText(label);
+    const compact = compactText(label);
+    let best = null;
+    let bestLength = 0;
+    ROW_TARGETS.forEach((target) => {
+      target.names.forEach((name) => {
+        if (!rowNameMatches(name, normalized, compact)) return;
+        if (name.compact.length <= bestLength) return;
+        best = target;
+        bestLength = name.compact.length;
+      });
+    });
+    return best;
+  }
+
+  function isRowHidden(label) {
+    const target = findRowTarget(label);
+    return !!target && !isRowVisible(target.key);
+  }
+
+  function thMatchesHidden(th) {
     const t = normText(th.textContent);
     if (!t) return false;
-    return blockedColumnMatchers.some((m) => {
-      if (!isColumnEnabled(m)) return false;
+    return columnMatchers.some((m) => {
+      if (isColumnVisible(m)) return false;
       return m === "remarks" ? t === "remarks" : t.includes(m);
     });
   }
@@ -369,7 +516,7 @@
       const ths = Array.from(theadRows[0].cells);
       colCount = ths.length;
       ths.forEach((th, i) => {
-        if (thMatchesBlocked(th)) hiddenCols.add(i);
+        if (thMatchesHidden(th)) hiddenCols.add(i);
         if (
           normText(th.textContent).includes(NARROW_MATCH) ||
           th.dataset.vmsShort === "1"
@@ -397,7 +544,7 @@
       const grid = buildHeaderGrid(theadRows);
       colCount = grid.colCount;
       grid.infos.forEach((h) => {
-        if (thMatchesBlocked(h.el)) {
+        if (thMatchesHidden(h.el)) {
           for (let c = h.c0; c < h.c1; c++) hiddenCols.add(c);
         }
       });
@@ -431,7 +578,7 @@
             if (row.cells.length <= 1) return;
             const cells = Array.from(row.cells);
             cells.forEach((cell, i) => {
-              if (thMatchesBlocked(cell)) {
+              if (thMatchesHidden(cell)) {
                 cell.style.display = "none";
               } else if (
                 hideLastCol &&
@@ -612,7 +759,8 @@
         }
         if (
           current.backgroundColor !== state.applied.backgroundColor ||
-          current.backgroundColorPriority !== state.applied.backgroundColorPriority
+          current.backgroundColorPriority !==
+            state.applied.backgroundColorPriority
         ) {
           state.original.backgroundColor = current.backgroundColor;
           state.original.backgroundColorPriority =
@@ -682,7 +830,7 @@
       });
       const ownBlockedData = new Set();
       dataLabels.forEach((label, dataIdx) => {
-        if (isBlockedLabel(label)) ownBlockedData.add(dataIdx);
+        if (isRowHidden(label)) ownBlockedData.add(dataIdx);
       });
       return {
         table: t,
@@ -867,7 +1015,8 @@
       width: "min(360px, calc(100vw - 24px))",
       maxWidth: "calc(100vw - 24px)",
       maxHeight: "min(70vh, 560px)",
-      overflowY: "auto",
+      flexDirection: "column",
+      overflow: "hidden",
       padding: "clamp(10px, 3vw, 12px)",
       background: "var(--vims-panel-bg)",
       border: "1px solid var(--vims-panel-border)",
@@ -924,6 +1073,7 @@
     const header = document.createElement("div");
     Object.assign(header.style, {
       display: "flex",
+      flex: "0 0 auto",
       alignItems: "center",
       justifyContent: "space-between",
       gap: "8px",
@@ -947,38 +1097,28 @@
       cursor: "pointer",
     });
     header.append(title, closeButton);
-    panel.appendChild(header);
 
-    function addSection(titleText) {
-      const first = panel.querySelectorAll("section").length === 0;
-      const section = document.createElement("section");
-      Object.assign(
-        section.style,
-        first
-          ? { marginTop: "8px" }
-          : {
-              marginTop: "14px",
-              paddingTop: "10px",
-              borderTop: "1px solid var(--vims-divider)",
-            },
-      );
-      const heading = document.createElement("div");
-      heading.textContent = titleText;
-      Object.assign(heading.style, {
-        margin: "0 -4px 6px",
-        padding: "5px 8px",
-        borderRadius: "4px",
-        background: "var(--vims-heading-bg)",
-        color: "var(--vims-text)",
-        fontSize: "11px",
-        fontWeight: "700",
-        letterSpacing: "0.05em",
-        textTransform: "uppercase",
-      });
-      section.appendChild(heading);
-      panel.appendChild(section);
-      return section;
-    }
+    const tabBar = document.createElement("div");
+    tabBar.setAttribute("role", "tablist");
+    tabBar.setAttribute("aria-label", "VIMS Enhancer sections");
+    Object.assign(tabBar.style, {
+      display: "flex",
+      flex: "0 0 auto",
+      flexWrap: "wrap",
+      gap: "4px",
+      marginBottom: "8px",
+    });
+
+    const tabBody = document.createElement("div");
+    Object.assign(tabBody.style, {
+      flex: "1 1 auto",
+      minHeight: "0",
+      overflowX: "hidden",
+      overflowY: "auto",
+      paddingRight: "2px",
+    });
+
+    panel.append(header, tabBar, tabBody);
 
     function addCheckbox(parent, labelText, checked, onChange) {
       const label = document.createElement("label");
@@ -1014,37 +1154,230 @@
       return input;
     }
 
-    const rowsSection = addSection("Rows to hide");
-    const rowInputs = blockedItems.map((item) =>
-      addCheckbox(
-        rowsSection,
-        item.label,
-        isRowEnabled(item.key),
-        (checked) => {
-          settings.rows[item.key] = checked;
+    const tabButtons = new Map();
+    const tabPanels = new Map();
+    let activeTabId = null;
+    let repositionPanel = null;
+
+    function selectTab(tabId) {
+      if (!tabPanels.has(tabId)) return;
+      tabButtons.forEach((button, id) => {
+        const active = id === tabId;
+        button.setAttribute("aria-selected", String(active));
+        button.tabIndex = active ? 0 : -1;
+        button.style.background = active
+          ? "var(--vims-heading-bg)"
+          : "transparent";
+        button.style.borderColor = active
+          ? "var(--vims-accent)"
+          : "var(--vims-divider)";
+        button.style.color = active
+          ? "var(--vims-text)"
+          : "var(--vims-label)";
+      });
+      tabPanels.forEach((panelEl, id) => {
+        panelEl.hidden = id !== tabId;
+      });
+      activeTabId = tabId;
+      tabBody.scrollTop = 0;
+      if (panel.style.display !== "none" && repositionPanel) {
+        repositionPanel();
+      }
+    }
+
+    function addTab(id, label) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.id = `vims-enhancer-tab-${id}`;
+      button.setAttribute("role", "tab");
+      button.setAttribute("aria-selected", "false");
+      button.setAttribute("aria-controls", `vims-enhancer-tabpanel-${id}`);
+      button.tabIndex = -1;
+      button.textContent = label;
+      Object.assign(button.style, {
+        padding: "5px 8px",
+        border: "1px solid var(--vims-divider)",
+        borderRadius: "6px",
+        background: "transparent",
+        color: "var(--vims-label)",
+        font: "inherit",
+        fontSize: "12px",
+        cursor: "pointer",
+      });
+      button.addEventListener("click", () => selectTab(id));
+
+      const tabPanel = document.createElement("div");
+      tabPanel.id = `vims-enhancer-tabpanel-${id}`;
+      tabPanel.setAttribute("role", "tabpanel");
+      tabPanel.setAttribute("aria-labelledby", button.id);
+      tabPanel.hidden = true;
+
+      tabBar.appendChild(button);
+      tabBody.appendChild(tabPanel);
+      tabButtons.set(id, button);
+      tabPanels.set(id, tabPanel);
+      return tabPanel;
+    }
+
+    tabBar.addEventListener("keydown", (event) => {
+      const order = Array.from(tabButtons.keys());
+      const current = order.indexOf(activeTabId);
+      let next = current;
+      if (event.key === "ArrowRight") {
+        next = (current + 1) % order.length;
+      } else if (event.key === "ArrowLeft") {
+        next = (current - 1 + order.length) % order.length;
+      } else if (event.key === "Home") {
+        next = 0;
+      } else if (event.key === "End") {
+        next = order.length - 1;
+      } else {
+        return;
+      }
+      const id = order[next];
+      selectTab(id);
+      tabButtons.get(id).focus();
+      event.preventDefault();
+    });
+
+    function addHint(parent, text) {
+      const hint = document.createElement("div");
+      hint.textContent = text;
+      Object.assign(hint.style, {
+        margin: "0 0 8px",
+        color: "var(--vims-note)",
+        fontSize: "11px",
+        lineHeight: "1.35",
+      });
+      parent.appendChild(hint);
+    }
+
+    function addListButtons(parent, rows, inputs, syncCount) {
+      const controls = document.createElement("div");
+      Object.assign(controls.style, {
+        display: "flex",
+        alignItems: "center",
+        flexWrap: "wrap",
+        gap: "6px",
+        marginBottom: "6px",
+      });
+
+      function addButton(text, checked) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = text;
+        Object.assign(button.style, {
+          padding: "3px 7px",
+          border: "1px solid var(--vims-reset-border)",
+          borderRadius: "5px",
+          background: "var(--vims-reset-bg)",
+          color: "var(--vims-reset-text)",
+          font: "inherit",
+          fontSize: "11px",
+          cursor: "pointer",
+        });
+        button.addEventListener("click", () => {
+          rows.forEach((row) => {
+            const key = rowKey(row);
+            settings.visibleRows[key] = checked;
+            inputs.get(key).checked = checked;
+          });
           saveSettings();
+          syncCount();
           applyFilters();
-        },
+        });
+        controls.appendChild(button);
+      }
+
+      addButton("Select all", true);
+      addButton("Unselect all", false);
+
+      const count = document.createElement("span");
+      Object.assign(count.style, {
+        marginLeft: "auto",
+        color: "var(--vims-note)",
+        fontSize: "11px",
+      });
+      controls.appendChild(count);
+      parent.appendChild(controls);
+      return count;
+    }
+
+    function addRowList(parent, rows, hintText) {
+      addHint(parent, hintText);
+      const inputs = new Map();
+      let count = null;
+      const syncCount = () => {
+        const shown = rows.filter(
+          (row) => inputs.get(rowKey(row)).checked,
+        ).length;
+        count.textContent = `${shown} of ${rows.length} shown`;
+      };
+      count = addListButtons(parent, rows, inputs, syncCount);
+      rows.forEach((row) => {
+        const key = rowKey(row);
+        const input = addCheckbox(
+          parent,
+          row.name,
+          isRowVisible(key),
+          (checked) => {
+            settings.visibleRows[key] = checked;
+            saveSettings();
+            syncCount();
+            applyFilters();
+          },
+        );
+        inputs.set(key, input);
+      });
+      syncCount();
+      return { rows, inputs, syncCount };
+    }
+
+    const rowLists = [];
+
+    const vaccinesPanel = addTab("vaccines", "Vaccines");
+    rowLists.push(
+      addRowList(
+        vaccinesPanel,
+        sortCatalogRows(
+          CATALOG.filter((row) => rowTab(row) === "vaccines"),
+        ),
+        "Checked items are shown; unchecked items stay hidden.",
       ),
     );
 
-    const columnsSection = addSection("Columns to hide");
-    const columnInputs = blockedColumnMatchers.map((key) =>
+    const suppliesPanel = addTab("supplies", "Supplies");
+    rowLists.push(
+      addRowList(
+        suppliesPanel,
+        sortCatalogRows(
+          CATALOG.filter((row) => rowTab(row) === "supplies"),
+        ),
+        "Checked items are shown; unchecked items stay hidden.",
+      ),
+    );
+
+    const columnsPanel = addTab("columns", "Columns");
+    addHint(
+      columnsPanel,
+      "Checked columns are shown; unchecked columns stay hidden.",
+    );
+    const columnInputs = columnMatchers.map((key) =>
       addCheckbox(
-        columnsSection,
+        columnsPanel,
         columnLabels[key] || key,
-        isColumnEnabled(key),
+        isColumnVisible(key),
         (checked) => {
-          settings.columns[key] = checked;
+          settings.visibleColumns[key] = checked;
           saveSettings();
           applyFilters();
         },
       ),
     );
 
-    const displaySection = addSection("Display");
+    const displayPanel = addTab("display", "Display");
     const stripesInput = addCheckbox(
-      displaySection,
+      displayPanel,
       "Zebra-stripe rows",
       settings.stripes,
       (checked) => {
@@ -1054,7 +1387,7 @@
       },
     );
     const transparentFooterInput = addCheckbox(
-      displaySection,
+      displayPanel,
       "Transparent footer",
       settings.transparentFooter,
       (checked) => {
@@ -1064,9 +1397,12 @@
       },
     );
 
+    selectTab("vaccines");
+
     const footer = document.createElement("div");
     Object.assign(footer.style, {
       display: "flex",
+      flex: "0 0 auto",
       alignItems: "center",
       justifyContent: "space-between",
       gap: "8px",
@@ -1246,6 +1582,7 @@
     });
     toggleButton.appendChild(createGearIcon());
     root.insertBefore(toggleButton, panel);
+    repositionPanel = positionPanel;
 
     const savedPosition = loadButtonPosition();
     if (savedPosition) {
@@ -1262,7 +1599,7 @@
       if (open) {
         applyPanelTheme(isDarkReaderDark());
         panel.style.visibility = "hidden";
-        panel.style.display = "block";
+        panel.style.display = "flex";
         positionPanel();
       } else {
         panel.style.display = "none";
@@ -1390,11 +1727,15 @@
     resetButton.addEventListener("click", () => {
       settings = defaultSettings();
       saveSettings();
-      blockedItems.forEach((item, index) => {
-        rowInputs[index].checked = isRowEnabled(item.key);
+      rowLists.forEach((list) => {
+        list.rows.forEach((row) => {
+          const key = rowKey(row);
+          list.inputs.get(key).checked = isRowVisible(key);
+        });
+        list.syncCount();
       });
-      blockedColumnMatchers.forEach((key, index) => {
-        columnInputs[index].checked = isColumnEnabled(key);
+      columnMatchers.forEach((key, index) => {
+        columnInputs[index].checked = isColumnVisible(key);
       });
       stripesInput.checked = settings.stripes;
       transparentFooterInput.checked = settings.transparentFooter;
@@ -1534,9 +1875,7 @@
     }, 200);
   }
 
-  const darkReaderRootObserver = new MutationObserver(
-    scheduleDarkReaderUpdate,
-  );
+  const darkReaderRootObserver = new MutationObserver(scheduleDarkReaderUpdate);
   darkReaderRootObserver.observe(document.documentElement, {
     attributes: true,
     attributeFilter: ["data-darkreader-mode", "data-darkreader-scheme"],
